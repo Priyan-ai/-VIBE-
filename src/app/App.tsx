@@ -9,6 +9,8 @@ import { BottomNav } from './components/BottomNav';
 import { Song, songs } from './data/musicData';
 import { useAuth } from '../context/AuthContext';
 import { AuthScreen } from './components/AuthScreen';
+// ✅ Fixed: direct static import instead of broken dynamic import
+import { supabase } from '../lib/supabase';
 
 const logoImage = '/src/assets/229c23a750655fa4a68de6cce10a3c01e214e592.png';
 
@@ -20,9 +22,9 @@ export default function App() {
   const [showNowPlaying, setShowNowPlaying] = useState(false);
   const [recentSongs, setRecentSongs] = useState<Song[]>([]);
   const [likedSongIds, setLikedSongIds] = useState<Set<string>>(new Set());
-
   const [dataLoaded, setDataLoaded] = useState(false);
 
+  // Load user data from Supabase user_metadata on login
   useEffect(() => {
     if (user?.user_metadata) {
       if (user.user_metadata.recentSongs) {
@@ -35,31 +37,28 @@ export default function App() {
     setDataLoaded(true);
   }, [user]);
 
+  // Sync recentSongs + likedSongIds back to Supabase with debounce
   useEffect(() => {
-    if (!dataLoaded || !user) return;
-    const syncData = async () => {
+    if (!dataLoaded || !user || !supabase) return;
+
+    const timer = setTimeout(async () => {
       try {
-        // @ts-ignore
-        const { supabase } = await import('../../src/lib/supabase');
-        await supabase.auth.updateUser({
+        const { error } = await supabase.auth.updateUser({
           data: {
             recentSongs,
-            likedSongIds: Array.from(likedSongIds)
-          }
+            likedSongIds: Array.from(likedSongIds),
+          },
         });
+        if (error) console.error('Supabase sync error:', error.message);
       } catch (err) {
-        console.error('Failed to sync to Supabase', err);
+        console.error('Failed to sync to Supabase:', err);
       }
-    };
-    
-    const timer = setTimeout(() => {
-      syncData();
     }, 1500);
-    
+
     return () => clearTimeout(timer);
   }, [recentSongs, likedSongIds, dataLoaded, user]);
 
-  // Set the logo as the favicon dynamically
+  // Set favicon and title
   useEffect(() => {
     document.title = 'Vibe';
     let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
@@ -81,14 +80,13 @@ export default function App() {
   };
 
   const handlePlayPause = () => {
-    setIsPlaying(!isPlaying);
+    setIsPlaying(prev => !prev);
   };
 
   const handleNext = () => {
     if (!currentSong) return;
-    const currentIndex = songs.findIndex((s) => s.id === currentSong.id);
-    const nextIndex = (currentIndex + 1) % songs.length;
-    const nextSong = songs[nextIndex];
+    const currentIndex = songs.findIndex(s => s.id === currentSong.id);
+    const nextSong = songs[(currentIndex + 1) % songs.length];
     setCurrentSong(nextSong);
     setIsPlaying(true);
     setRecentSongs(prev => {
@@ -99,7 +97,7 @@ export default function App() {
 
   const handlePrevious = () => {
     if (!currentSong) return;
-    const currentIndex = songs.findIndex((s) => s.id === currentSong.id);
+    const currentIndex = songs.findIndex(s => s.id === currentSong.id);
     const prevIndex = currentIndex === 0 ? songs.length - 1 : currentIndex - 1;
     const prevSong = songs[prevIndex];
     setCurrentSong(prevSong);
@@ -107,6 +105,18 @@ export default function App() {
     setRecentSongs(prev => {
       const filtered = prev.filter(s => s.id !== prevSong.id);
       return [prevSong, ...filtered].slice(0, 20);
+    });
+  };
+
+  const handleToggleLike = (songId: string) => {
+    setLikedSongIds(prev => {
+      const updated = new Set(prev);
+      if (updated.has(songId)) {
+        updated.delete(songId);
+      } else {
+        updated.add(songId);
+      }
+      return updated;
     });
   };
 
@@ -118,9 +128,20 @@ export default function App() {
       case 'search':
         return <SearchPage onPlaySong={handlePlaySong} />;
       case 'library':
-        return <LibraryPage onPlaySong={handlePlaySong} recentSongs={recentSongs} likedSongs={likedSongs} />;
+        return (
+          <LibraryPage
+            onPlaySong={handlePlaySong}
+            recentSongs={recentSongs}
+            likedSongs={likedSongs}
+          />
+        );
       case 'profile':
-        return <ProfilePage songCount={likedSongIds.size} recentCount={recentSongs.length} />;
+        return (
+          <ProfilePage
+            songCount={likedSongIds.size}
+            recentCount={recentSongs.length}
+          />
+        );
       default:
         return <HomePage onPlaySong={handlePlaySong} />;
     }
@@ -137,7 +158,7 @@ export default function App() {
   return (
     <div className="size-full bg-black text-white overflow-hidden">
       {/* Main Content */}
-      <div className="h-full overflow-y-auto">
+      <div className="h-full overflow-y-auto pb-32">
         {renderContent()}
       </div>
 
